@@ -46,6 +46,7 @@ def data_provider(args, flag):
             drop_last=drop_last)
         return data_set, data_loader
     elif args.task_name == 'classification':
+        shuffle_flag = False
         drop_last = False
         data_set = Data(
             args = args,
