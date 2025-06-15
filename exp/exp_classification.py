@@ -9,6 +9,7 @@ import time
 import warnings
 import numpy as np
 import pdb
+from sklearn.metrics import precision_recall_curve, auc, average_precision_score
 
 warnings.filterwarnings('ignore')
 
@@ -68,17 +69,23 @@ class Exp_Classification(Exp_Basic):
 
         preds = torch.cat(preds, 0)
         trues = torch.cat(trues, 0)
-        probs = torch.nn.functional.softmax(preds)  # (total_samples, num_classes) est. prob. for each class and sample
+        probs = torch.nn.functional.softmax(preds, dim=1)  # (total_samples, num_classes) est. prob. for each class and sample
         predictions = torch.argmax(probs, dim=1).cpu().numpy()  # (total_samples,) int class index for each sample
         trues = trues.flatten().cpu().numpy()
         accuracy = cal_accuracy(predictions, trues)
+        
+        # Calculate PR AUC for binary classification
+        pr_auc = 0.0
+        if self.args.num_class == 2:
+            pos_probs = probs[:, 1].cpu().numpy()
+            pr_auc = average_precision_score(trues, pos_probs)
 
         self.model.train()
-        return total_loss, accuracy
+        return total_loss, accuracy, pr_auc
 
     def train(self, setting):
         train_data, train_loader = self._get_data(flag='TRAIN')
-        vali_data, vali_loader = self._get_data(flag='TEST')
+        vali_data, vali_loader = self._get_data(flag='VAL')
         test_data, test_loader = self._get_data(flag='TEST')
 
         path = os.path.join(self.args.checkpoints, setting)
@@ -126,13 +133,21 @@ class Exp_Classification(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            vali_loss, val_accuracy = self.vali(vali_data, vali_loader, criterion)
-            test_loss, test_accuracy = self.vali(test_data, test_loader, criterion)
+            vali_loss, val_accuracy, val_pr_auc = self.vali(vali_data, vali_loader, criterion)
+            test_loss, test_accuracy, test_pr_auc = self.vali(test_data, test_loader, criterion)
 
-            print(
-                "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
-                .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
-            early_stopping(-val_accuracy, self.model, path)
+            if self.args.num_class == 2:
+                print(
+                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Vali PR-AUC: {5:.3f} Test Loss: {6:.3f} Test Acc: {7:.3f} Test PR-AUC: {8:.3f}"
+                    .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, val_pr_auc, test_loss, test_accuracy, test_pr_auc))
+                # For binary classification, use PR-AUC for early stopping instead of accuracy
+                early_stopping(-val_pr_auc, self.model, path)
+            else:
+                print(
+                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
+                    .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
+                early_stopping(-val_accuracy, self.model, path)
+                
             if early_stopping.early_stop:
                 print("Early stopping")
                 break
@@ -170,22 +185,42 @@ class Exp_Classification(Exp_Basic):
         trues = torch.cat(trues, 0)
         print('test shape:', preds.shape, trues.shape)
 
-        probs = torch.nn.functional.softmax(preds)  # (total_samples, num_classes) est. prob. for each class and sample
+        probs = torch.nn.functional.softmax(preds, dim=1)  # (total_samples, num_classes) est. prob. for each class and sample
         predictions = torch.argmax(probs, dim=1).cpu().numpy()  # (total_samples,) int class index for each sample
         trues = trues.flatten().cpu().numpy()
         accuracy = cal_accuracy(predictions, trues)
+        
+        # Calculate PR AUC for binary classification
+        pr_auc = None
+        avg_precision = None
+        if self.args.num_class == 2:  # Binary classification
+            # Get probabilities for positive class (class 1)
+            pos_probs = probs[:, 1].cpu().numpy()
+            
+            # Calculate precision-recall curve
+            precision, recall, _ = precision_recall_curve(trues, pos_probs)
+            pr_auc = auc(recall, precision)
+            
+            # Also calculate average precision score
+            avg_precision = average_precision_score(trues, pos_probs)
 
         # result save
         folder_path = './results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
-        print('accuracy:{}'.format(accuracy))
+        print('Accuracy: {:.4f}'.format(accuracy))
+        if pr_auc is not None:
+            print('PR AUC: {:.4f}'.format(pr_auc))
+            print('Average Precision: {:.4f}'.format(avg_precision))
+            
         file_name='result_classification.txt'
         f = open(os.path.join(folder_path,file_name), 'a')
         f.write(setting + "  \n")
-        f.write('accuracy:{}'.format(accuracy))
-        f.write('\n')
+        f.write('Accuracy: {:.4f}\n'.format(accuracy))
+        if pr_auc is not None:
+            f.write('PR AUC: {:.4f}\n'.format(pr_auc))
+            f.write('Average Precision: {:.4f}\n'.format(avg_precision))
         f.write('\n')
         f.close()
         return

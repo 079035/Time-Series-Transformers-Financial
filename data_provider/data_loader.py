@@ -746,3 +746,165 @@ class UEAloader(Dataset):
 
     def __len__(self):
         return len(self.all_IDs)
+
+
+class OrderbookLoader(Dataset):
+    """
+    Dataset class for orderbook data stored in parquet files.
+    Designed for binary classification with SMP as the target label.
+    
+    The dataset expects parquet files named:
+        - Orderbook_TRAIN.parquet
+        - Orderbook_VAL.parquet  
+        - Orderbook_TEST.parquet
+    
+    Features:
+        - Loads data from parquet files
+        - Handles variable-length sequences 
+        - Performs normalization
+        - Returns (features, label) pairs for binary classification
+    """
+    
+    def __init__(self, args, root_path, flag='TRAIN'):
+        self.args = args
+        self.root_path = root_path
+        self.flag = flag.upper()
+        self.seq_len = args.seq_len if hasattr(args, 'seq_len') else 96
+        
+        # Map flag to file names
+        flag_map = {
+            'TRAIN': 'Orderbook_TRAIN.parquet',
+            'VAL': 'Orderbook_VAL.parquet',
+            'TEST': 'Orderbook_TEST.parquet'
+        }
+        
+        if self.flag not in flag_map:
+            raise ValueError(f"Invalid flag: {flag}. Must be one of {list(flag_map.keys())}")
+            
+        # Load the appropriate parquet file
+        file_path = os.path.join(root_path, flag_map[self.flag])
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Data file not found: {file_path}")
+            
+        print(f"Loading data from: {file_path}")
+        self.df = pd.read_parquet(file_path)
+        
+        # Extract features and labels
+        self._preprocess_data()
+        
+    def _preprocess_data(self):
+        """Preprocess the orderbook data"""
+        # Ensure TIME column is datetime
+        if 'TIME' in self.df.columns:
+            self.df['TIME'] = pd.to_datetime(self.df['TIME'])
+            self.df = self.df.sort_values('TIME')
+            
+            # Generate time features from nanosecond timestamps
+            self.time_features = self._generate_time_features(self.df['TIME'])
+        else:
+            self.time_features = None
+        
+        # Extract target label
+        if 'SMP' not in self.df.columns:
+            raise ValueError("Target column 'SMP' not found in data")
+            
+        # Convert boolean to int for binary classification
+        self.labels = self.df['SMP'].astype(int).values
+        
+        # Select feature columns (exclude TIME and SMP)
+        feature_cols = [col for col in self.df.columns if col not in ['TIME', 'SMP']]
+        self.feature_df = self.df[feature_cols]
+        
+        # Store feature names
+        self.feature_names = feature_cols
+        self.num_features = len(feature_cols)
+        
+        # Normalize features
+        self.scaler = StandardScaler()
+        if self.flag == 'TRAIN':
+            self.feature_values = self.scaler.fit_transform(self.feature_df.values)
+        else:
+            # For val/test, we should use the scaler fitted on train data
+            # For now, we'll fit on the current data
+            self.feature_values = self.scaler.fit_transform(self.feature_df.values)
+            
+        # Optionally concatenate time features
+        if self.time_features is not None and hasattr(self.args, 'use_time_features') and self.args.use_time_features:
+            self.feature_values = np.concatenate([self.feature_values, self.time_features], axis=1)
+            self.num_features += self.time_features.shape[1]
+        
+        # Calculate number of samples based on sequence length
+        self.num_samples = len(self.feature_values) - self.seq_len + 1
+        if self.num_samples <= 0:
+            raise ValueError(f"Dataset too small. Need at least {self.seq_len} time steps, but got {len(self.feature_values)}")
+            
+        # Set class names for binary classification
+        self.class_names = ['False', 'True']  # For SMP boolean values
+        
+        print(f"Loaded {self.flag} dataset: {self.num_samples} samples, {self.num_features} features, sequence length: {self.seq_len}")
+        
+    def _generate_time_features(self, timestamps):
+        """Generate time-based features from nanosecond timestamps"""
+        # Convert to datetime if needed
+        dt = pd.to_datetime(timestamps)
+        
+        # Extract time features
+        time_features = pd.DataFrame()
+        
+        # Hour of day (0-23)
+        time_features['hour'] = dt.dt.hour
+        
+        # Minute of hour (0-59)
+        time_features['minute'] = dt.dt.minute
+        
+        # Second of minute (0-59)
+        time_features['second'] = dt.dt.second
+        
+        # Microsecond component
+        time_features['microsecond'] = dt.dt.microsecond
+        
+        # Time since market open (6 PM = 18:00)
+        market_open = dt.dt.normalize() + pd.Timedelta(hours=18)
+        # Handle cases where time is before 6 PM (next day)
+        mask = dt.dt.hour < 18
+        market_open[mask] = market_open[mask] - pd.Timedelta(days=1)
+        
+        # Minutes since market open
+        time_features['minutes_since_open'] = (dt - market_open).dt.total_seconds() / 60
+        
+        # Normalized time features (cyclical encoding)
+        time_features['hour_sin'] = np.sin(2 * np.pi * time_features['hour'] / 24)
+        time_features['hour_cos'] = np.cos(2 * np.pi * time_features['hour'] / 24)
+        time_features['minute_sin'] = np.sin(2 * np.pi * time_features['minute'] / 60)
+        time_features['minute_cos'] = np.cos(2 * np.pi * time_features['minute'] / 60)
+        
+        # Normalize the features
+        time_scaler = StandardScaler()
+        return time_scaler.fit_transform(time_features.values)
+        
+    def __getitem__(self, idx):
+        """Get a single sample"""
+        # Extract sequence of features
+        start_idx = idx
+        end_idx = start_idx + self.seq_len
+        
+        # Get feature sequence
+        seq_x = self.feature_values[start_idx:end_idx]
+        
+        # Get label at the end of the sequence
+        label = self.labels[end_idx - 1]
+        
+        # Convert to tensors
+        seq_x = torch.FloatTensor(seq_x)
+        label = torch.LongTensor([label])
+        
+        # Return (X, y) tuple as expected by collate_fn
+        return seq_x, label
+        
+    def __len__(self):
+        return self.num_samples
+        
+    @property
+    def max_seq_len(self):
+        """Maximum sequence length"""
+        return self.seq_len
