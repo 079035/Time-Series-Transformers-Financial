@@ -819,14 +819,30 @@ class OrderbookLoader(Dataset):
         self.feature_names = feature_cols
         self.num_features = len(feature_cols)
         
-        # Normalize features
-        self.scaler = StandardScaler()
+        # Normalize features with proper scaler sharing
+        scaler_path = os.path.join(self.root_path, 'orderbook_scaler.pkl')
+        
         if self.flag == 'TRAIN':
+            # Fit scaler on training data and save it
+            self.scaler = StandardScaler()
             self.feature_values = self.scaler.fit_transform(self.feature_df.values)
+            # Save the scaler for validation and test sets
+            import joblib
+            joblib.dump(self.scaler, scaler_path)
+            print(f"Fitted and saved scaler to {scaler_path}")
         else:
-            # For val/test, we should use the scaler fitted on train data
-            # For now, we'll fit on the current data
-            self.feature_values = self.scaler.fit_transform(self.feature_df.values)
+            # Load the scaler fitted on training data
+            if os.path.exists(scaler_path):
+                import joblib
+                self.scaler = joblib.load(scaler_path)
+                self.feature_values = self.scaler.transform(self.feature_df.values)
+                print(f"Loaded scaler from {scaler_path} for {self.flag} data")
+            else:
+                # Fallback: fit on current data (should print warning)
+                print(f"WARNING: Scaler file not found at {scaler_path}. Fitting scaler on {self.flag} data.")
+                print("This may cause scaling inconsistencies. Make sure to run TRAIN first.")
+                self.scaler = StandardScaler()
+                self.feature_values = self.scaler.fit_transform(self.feature_df.values)
             
         # Optionally concatenate time features
         if self.time_features is not None and hasattr(self.args, 'use_time_features') and self.args.use_time_features:
@@ -878,9 +894,32 @@ class OrderbookLoader(Dataset):
         time_features['minute_sin'] = np.sin(2 * np.pi * time_features['minute'] / 60)
         time_features['minute_cos'] = np.cos(2 * np.pi * time_features['minute'] / 60)
         
-        # Normalize the features
-        time_scaler = StandardScaler()
-        return time_scaler.fit_transform(time_features.values)
+        # Normalize the time features with proper scaler sharing
+        time_scaler_path = os.path.join(self.root_path, 'orderbook_time_scaler.pkl')
+        
+        if self.flag == 'TRAIN':
+            # Fit time scaler on training data and save it
+            time_scaler = StandardScaler()
+            normalized_time_features = time_scaler.fit_transform(time_features.values)
+            # Save the time scaler
+            import joblib
+            joblib.dump(time_scaler, time_scaler_path)
+            print(f"Fitted and saved time scaler to {time_scaler_path}")
+            return normalized_time_features
+        else:
+            # Load the time scaler fitted on training data
+            if os.path.exists(time_scaler_path):
+                import joblib
+                time_scaler = joblib.load(time_scaler_path)
+                normalized_time_features = time_scaler.transform(time_features.values)
+                print(f"Loaded time scaler from {time_scaler_path} for {self.flag} data")
+                return normalized_time_features
+            else:
+                # Fallback: fit on current data (should print warning)
+                print(f"WARNING: Time scaler file not found at {time_scaler_path}. Fitting time scaler on {self.flag} data.")
+                print("This may cause time feature scaling inconsistencies. Make sure to run TRAIN first.")
+                time_scaler = StandardScaler()
+                return time_scaler.fit_transform(time_features.values)
         
     def __getitem__(self, idx):
         """Get a single sample"""
