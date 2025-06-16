@@ -1,6 +1,7 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, cal_accuracy
+from utils.losses import FocalLoss, WeightedBCEWithLogitsLoss, WeightedCrossEntropyLoss
 import torch
 import torch.nn as nn
 from torch import optim
@@ -42,7 +43,39 @@ class Exp_Classification(Exp_Basic):
         return model_optim
 
     def _select_criterion(self):
-        criterion = nn.CrossEntropyLoss()
+        """Select the appropriate loss function based on args.class_loss"""
+        if self.args.class_loss == 'CE':
+            criterion = nn.CrossEntropyLoss()
+        elif self.args.class_loss == 'focal':
+            # For binary classification with severe imbalance, use alpha to weight classes
+            if self.args.num_class == 2:
+                # alpha weights for [negative, positive] classes
+                alpha = [1 - self.args.focal_alpha, self.args.focal_alpha]
+            else:
+                alpha = None
+            criterion = FocalLoss(alpha=alpha, gamma=self.args.focal_gamma)
+        elif self.args.class_loss == 'weighted_ce':
+            # Parse class weights from string
+            weights = [float(w) for w in self.args.class_weights.split(',')]
+            if len(weights) != self.args.num_class:
+                raise ValueError(f"Number of class weights ({len(weights)}) must match number of classes ({self.args.num_class})")
+            weight_tensor = torch.tensor(weights, device=self.device)
+            criterion = WeightedCrossEntropyLoss(weight=weight_tensor)
+        elif self.args.class_loss == 'weighted_bce':
+            if self.args.num_class != 2:
+                raise ValueError("Weighted BCE loss only supports binary classification")
+            criterion = WeightedBCEWithLogitsLoss(pos_weight=self.args.pos_weight)
+        else:
+            raise ValueError(f"Unknown classification loss: {self.args.class_loss}")
+        
+        print(f"Using {self.args.class_loss} loss function")
+        if self.args.class_loss == 'focal':
+            print(f"  Focal loss parameters: alpha={self.args.focal_alpha}, gamma={self.args.focal_gamma}")
+        elif self.args.class_loss == 'weighted_bce':
+            print(f"  Weighted BCE pos_weight={self.args.pos_weight}")
+        elif self.args.class_loss == 'weighted_ce':
+            print(f"  Class weights: {self.args.class_weights}")
+            
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
@@ -58,9 +91,9 @@ class Exp_Classification(Exp_Basic):
 
                 outputs = self.model(batch_x, padding_mask, None, None)
 
-                pred = outputs.detach().cpu()
-                loss = criterion(pred, label.long().squeeze().cpu())
-                total_loss.append(loss)
+                # Compute loss on the same device as the model/criterion
+                loss = criterion(outputs, label.long().squeeze(-1))
+                total_loss.append(loss.item())
 
                 preds.append(outputs.detach())
                 trues.append(label)

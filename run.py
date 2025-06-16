@@ -95,6 +95,13 @@ if __name__ == '__main__':
     parser.add_argument('--des', type=str, default='test', help='exp description')
     parser.add_argument('--loss', type=str, default='MSE', help='loss function')
     parser.add_argument('--lradj', type=str, default='type1', help='adjust learning rate')
+    
+    # Classification-specific arguments
+    parser.add_argument('--class_loss', type=str, default='CE', help='classification loss function: CE, focal, weighted_ce, weighted_bce')
+    parser.add_argument('--focal_alpha', type=float, default=0.25, help='focal loss alpha parameter')
+    parser.add_argument('--focal_gamma', type=float, default=2.0, help='focal loss gamma parameter')
+    parser.add_argument('--pos_weight', type=float, default=100.0, help='positive class weight for weighted BCE (estimated 1% positive rate)')
+    parser.add_argument('--class_weights', type=str, default='1.0,100.0', help='class weights for weighted CE loss (comma separated)')
     parser.add_argument('--use_amp', action='store_true', help='use automatic mixed precision training', default=False)
 
     # GPU
