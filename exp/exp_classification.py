@@ -166,19 +166,22 @@ class Exp_Classification(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
+            
+            # Compute metrics for all sets including training
+            train_eval_loss, train_accuracy, train_pr_auc = self.vali(train_data, train_loader, criterion)
             vali_loss, val_accuracy, val_pr_auc = self.vali(vali_data, vali_loader, criterion)
             test_loss, test_accuracy, test_pr_auc = self.vali(test_data, test_loader, criterion)
 
             if self.args.num_class == 2:
                 print(
-                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Vali PR-AUC: {5:.3f} Test Loss: {6:.3f} Test Acc: {7:.3f} Test PR-AUC: {8:.3f}"
-                    .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, val_pr_auc, test_loss, test_accuracy, test_pr_auc))
+                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} Train PR-AUC: {4:.3f} | Vali Loss: {5:.3f} Vali Acc: {6:.3f} Vali PR-AUC: {7:.3f} | Test Loss: {8:.3f} Test Acc: {9:.3f} Test PR-AUC: {10:.3f}"
+                    .format(epoch + 1, train_steps, train_loss, train_accuracy, train_pr_auc, vali_loss, val_accuracy, val_pr_auc, test_loss, test_accuracy, test_pr_auc))
                 # For binary classification, use PR-AUC for early stopping instead of accuracy
                 early_stopping(-val_pr_auc, self.model, path)
             else:
                 print(
-                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
-                    .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
+                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} | Vali Loss: {4:.3f} Vali Acc: {5:.3f} | Test Loss: {6:.3f} Test Acc: {7:.3f}"
+                    .format(epoch + 1, train_steps, train_loss, train_accuracy, vali_loss, val_accuracy, test_loss, test_accuracy))
                 early_stopping(-val_accuracy, self.model, path)
                 
             if early_stopping.early_stop:
@@ -187,6 +190,27 @@ class Exp_Classification(Exp_Basic):
 
         best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
+
+        # Final evaluation and logging
+        final_train_loss, final_train_accuracy, final_train_pr_auc = self.vali(train_data, train_loader, criterion)
+        final_vali_loss, final_val_accuracy, final_val_pr_auc = self.vali(vali_data, vali_loader, criterion)
+        
+        folder_path = './results/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        file_name='result_classification.txt'
+        f = open(os.path.join(folder_path,file_name), 'a')
+        f.write(setting + "  \n")
+        f.write('Train Final Results:\n')
+        f.write('Train Accuracy: {:.4f}\n'.format(final_train_accuracy))
+        if self.args.num_class == 2:
+            f.write('Train PR AUC: {:.4f}\n'.format(final_train_pr_auc))
+        f.write('Validation Final Results:\n')
+        f.write('Validation Accuracy: {:.4f}\n'.format(final_val_accuracy))
+        if self.args.num_class == 2:
+            f.write('Validation PR AUC: {:.4f}\n'.format(final_val_pr_auc))
+        f.close()
 
         return self.model
 
@@ -250,6 +274,7 @@ class Exp_Classification(Exp_Basic):
         file_name='result_classification.txt'
         f = open(os.path.join(folder_path,file_name), 'a')
         f.write(setting + "  \n")
+        f.write('Test Final Results:\n')
         f.write('Accuracy: {:.4f}\n'.format(accuracy))
         if pr_auc is not None:
             f.write('PR AUC: {:.4f}\n'.format(pr_auc))
