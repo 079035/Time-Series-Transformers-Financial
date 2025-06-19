@@ -4,9 +4,9 @@ model_name=TimesNet
 
 # Define hyperparameter arrays
 e_layers_options=(3 6)
-d_model_options=(128 256 512)
-d_ff_options=(256 512 1024)
-learning_rate_options=(0.001 0.0001)
+d_model_options=(128 256 512 1024 2048)
+d_ff_options=(256 512 1024 2048)
+learning_rate_options=(0.0001)
 
 # Create log directory
 mkdir -p logs/hyperparameter_search
@@ -50,9 +50,8 @@ for e_layers in "${e_layers_options[@]}"; do
                     --itr 1 \
                     --num_kernels 6 \
                     --learning_rate $learning_rate \
-                    --train_epochs 100 \
+                    --train_epochs 1 \
                     --patience 10 \
-                    --use_gpu True \
                     --class_loss weighted_ce \
                     --class_weights "1.0,100.0" \
                     2>&1 | tee "$log_file"

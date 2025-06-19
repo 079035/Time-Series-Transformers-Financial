@@ -118,7 +118,16 @@ class Exp_Classification(Exp_Basic):
 
     def train(self, setting):
         train_data, train_loader = self._get_data(flag='TRAIN')
-        vali_data, vali_loader = self._get_data(flag='VAL')
+        
+        # Try to get validation data, but make it optional
+        try:
+            vali_data, vali_loader = self._get_data(flag='VAL')
+            has_validation = True
+        except:
+            print("No validation data found, training without validation")
+            vali_data, vali_loader = None, None
+            has_validation = False
+            
         test_data, test_loader = self._get_data(flag='TEST')
 
         path = os.path.join(self.args.checkpoints, setting)
@@ -128,7 +137,7 @@ class Exp_Classification(Exp_Basic):
         time_now = time.time()
 
         train_steps = len(train_loader)
-        early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
+        early_stopping = EarlyStopping(patience=self.args.patience, verbose=True) if has_validation else None
 
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
@@ -169,31 +178,45 @@ class Exp_Classification(Exp_Basic):
             
             # Compute metrics for all sets including training
             train_eval_loss, train_accuracy, train_pr_auc = self.vali(train_data, train_loader, criterion)
-            vali_loss, val_accuracy, val_pr_auc = self.vali(vali_data, vali_loader, criterion)
             test_loss, test_accuracy, test_pr_auc = self.vali(test_data, test_loader, criterion)
 
-            if self.args.num_class == 2:
-                print(
-                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} Train PR-AUC: {4:.3f} | Vali Loss: {5:.3f} Vali Acc: {6:.3f} Vali PR-AUC: {7:.3f} | Test Loss: {8:.3f} Test Acc: {9:.3f} Test PR-AUC: {10:.3f}"
-                    .format(epoch + 1, train_steps, train_loss, train_accuracy, train_pr_auc, vali_loss, val_accuracy, val_pr_auc, test_loss, test_accuracy, test_pr_auc))
-                # For binary classification, use PR-AUC for early stopping instead of accuracy
-                early_stopping(-val_pr_auc, self.model, path)
-            else:
-                print(
-                    "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} | Vali Loss: {4:.3f} Vali Acc: {5:.3f} | Test Loss: {6:.3f} Test Acc: {7:.3f}"
-                    .format(epoch + 1, train_steps, train_loss, train_accuracy, vali_loss, val_accuracy, test_loss, test_accuracy))
-                early_stopping(-val_accuracy, self.model, path)
+            if has_validation:
+                vali_loss, val_accuracy, val_pr_auc = self.vali(vali_data, vali_loader, criterion)
                 
-            if early_stopping.early_stop:
-                print("Early stopping")
-                break
+                if self.args.num_class == 2:
+                    print(
+                        "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} Train PR-AUC: {4:.3f} | Vali Loss: {5:.3f} Vali Acc: {6:.3f} Vali PR-AUC: {7:.3f} | Test Loss: {8:.3f} Test Acc: {9:.3f} Test PR-AUC: {10:.3f}"
+                        .format(epoch + 1, train_steps, train_loss, train_accuracy, train_pr_auc, vali_loss, val_accuracy, val_pr_auc, test_loss, test_accuracy, test_pr_auc))
+                    # For binary classification, use PR-AUC for early stopping instead of accuracy
+                    early_stopping(-val_pr_auc, self.model, path)
+                else:
+                    print(
+                        "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} | Vali Loss: {4:.3f} Vali Acc: {5:.3f} | Test Loss: {6:.3f} Test Acc: {7:.3f}"
+                        .format(epoch + 1, train_steps, train_loss, train_accuracy, vali_loss, val_accuracy, test_loss, test_accuracy))
+                    early_stopping(-val_accuracy, self.model, path)
+                    
+                if early_stopping.early_stop:
+                    print("Early stopping")
+                    break
+            else:
+                # No validation set - just print train and test metrics
+                if self.args.num_class == 2:
+                    print(
+                        "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} Train PR-AUC: {4:.3f} | Test Loss: {5:.3f} Test Acc: {6:.3f} Test PR-AUC: {7:.3f}"
+                        .format(epoch + 1, train_steps, train_loss, train_accuracy, train_pr_auc, test_loss, test_accuracy, test_pr_auc))
+                else:
+                    print(
+                        "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Train Acc: {3:.3f} | Test Loss: {4:.3f} Test Acc: {5:.3f}"
+                        .format(epoch + 1, train_steps, train_loss, train_accuracy, test_loss, test_accuracy))
+                
+                # Save model after each epoch when no validation (since no early stopping)
+                torch.save(self.model.state_dict(), path + '/' + 'checkpoint.pth')
 
         best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
 
         # Final evaluation and logging
         final_train_loss, final_train_accuracy, final_train_pr_auc = self.vali(train_data, train_loader, criterion)
-        final_vali_loss, final_val_accuracy, final_val_pr_auc = self.vali(vali_data, vali_loader, criterion)
         
         folder_path = './results/' + setting + '/'
         if not os.path.exists(folder_path):
@@ -206,10 +229,13 @@ class Exp_Classification(Exp_Basic):
         f.write('Train Accuracy: {:.4f}\n'.format(final_train_accuracy))
         if self.args.num_class == 2:
             f.write('Train PR AUC: {:.4f}\n'.format(final_train_pr_auc))
-        f.write('Validation Final Results:\n')
-        f.write('Validation Accuracy: {:.4f}\n'.format(final_val_accuracy))
-        if self.args.num_class == 2:
-            f.write('Validation PR AUC: {:.4f}\n'.format(final_val_pr_auc))
+        
+        if has_validation:
+            final_vali_loss, final_val_accuracy, final_val_pr_auc = self.vali(vali_data, vali_loader, criterion)
+            f.write('Validation Final Results:\n')
+            f.write('Validation Accuracy: {:.4f}\n'.format(final_val_accuracy))
+            if self.args.num_class == 2:
+                f.write('Validation PR AUC: {:.4f}\n'.format(final_val_pr_auc))
         f.close()
 
         return self.model
